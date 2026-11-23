@@ -1,78 +1,42 @@
-import sqlite3
+import json
+import os
+import threading
 from datetime import datetime, timezone
 from typing import Optional, Dict, List, Any
 
-DEFAULT_DB_PATH = "cryptopay.db"
+DEFAULT_DB_PATH = "cryptopay_data.json"
+_db_lock = threading.Lock()
 
 
-def get_connection(db_path: str = DEFAULT_DB_PATH) -> sqlite3.Connection:
-    """Crea y devuelve una conexión a SQLite con acceso por nombre de columna."""
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    return conn
+def _empty_structure() -> Dict[str, Any]:
+    """Estructura base del archivo JSON de CryptoPay."""
+    return {
+        "users": {},          # Diccionario indexado por username
+        "transactions": [],   # Lista de transferencias
+        "used_nonces": {},    # Diccionario {tx_nonce: used_at} para anti-replay
+        "crypto_logs": []     # Lista de eventos de auditoría criptográfica
+    }
+
+
+def _load_data(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Any]:
+    """Lee y devuelve el contenido del archivo JSON."""
+    if not os.path.exists(db_path):
+        init_db(db_path)
+    with open(db_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _save_data(data: Dict[str, Any], db_path: str = DEFAULT_DB_PATH) -> None:
+    """Guarda el diccionario en el archivo JSON con formato legible."""
+    with open(db_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4, ensure_ascii=False)
 
 
 def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
-    """Inicializa las 4 tablas principales del sistema CryptoPay."""
-    with get_connection(db_path) as conn:
-        cursor = conn.cursor()
-
-        # 1. Tabla de usuarios y custodia de claves
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT UNIQUE NOT NULL,
-                password_salt TEXT NOT NULL,
-                password_hash TEXT NOT NULL,
-                totp_secret TEXT NOT NULL,
-                rsa_public_pem TEXT NOT NULL,
-                rsa_private_enc_pem TEXT NOT NULL,
-                ecdsa_public_pem TEXT NOT NULL,
-                ecdsa_private_enc_pem TEXT NOT NULL,
-                balance REAL NOT NULL DEFAULT 100.00
-            )
-        """)
-
-        # 2. Tabla de transferencias (cifrado híbrido + firma + HMAC)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS transactions (
-                tx_id TEXT PRIMARY KEY,
-                sender TEXT NOT NULL,
-                receiver TEXT NOT NULL,
-                amount REAL NOT NULL,
-                timestamp TEXT NOT NULL,
-                aes_nonce TEXT NOT NULL,
-                aes_ciphertext TEXT NOT NULL,
-                enc_aes_key_receiver TEXT NOT NULL,
-                enc_aes_key_sender TEXT NOT NULL,
-                ecdsa_signature TEXT NOT NULL,
-                settlement_hmac TEXT NOT NULL,
-                tx_nonce TEXT UNIQUE NOT NULL,
-                FOREIGN KEY (sender) REFERENCES users(username),
-                FOREIGN KEY (receiver) REFERENCES users(username)
-            )
-        """)
-
-        # 3. Tabla anti-replay (registro de nonces ya consumidos)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS used_nonces (
-                tx_nonce TEXT PRIMARY KEY,
-                used_at TEXT NOT NULL
-            )
-        """)
-
-        # 4. Tabla de logs criptográficos (NUNCA almacena claves secretas ni contraseñas)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS crypto_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT NOT NULL,
-                operation TEXT NOT NULL,
-                algorithm TEXT NOT NULL,
-                details TEXT NOT NULL
-            )
-        """)
-
-        conn.commit()
+    """Crea el archivo JSON inicial de CryptoPay si no existe."""
+    with _db_lock:
+        if not os.path.exists(db_path):
+            _save_data(_empty_structure(), db_path)
 
 
 # ==========================================
@@ -91,40 +55,40 @@ def create_user(
     initial_balance: float = 100.00,
     db_path: str = DEFAULT_DB_PATH
 ) -> bool:
-    """Registra un nuevo usuario. Devuelve False si el username ya existe."""
-    try:
-        with get_connection(db_path) as conn:
-            conn.execute("""
-                INSERT INTO users (
-                    username, password_salt, password_hash, totp_secret,
-                    rsa_public_pem, rsa_private_enc_pem,
-                    ecdsa_public_pem, ecdsa_private_enc_pem, balance
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                username, password_salt, password_hash, totp_secret,
-                rsa_public_pem, rsa_private_enc_pem,
-                ecdsa_public_pem, ecdsa_private_enc_pem, initial_balance
-            ))
-            conn.commit()
+    """Registra un nuevo usuario en CryptoPay. Devuelve False si ya existe."""
+    with _db_lock:
+        data = _load_data(db_path)
+        if username in data["users"]:
+            return False
+
+        data["users"][username] = {
+            "username": username,
+            "password_salt": password_salt,
+            "password_hash": password_hash,
+            "totp_secret": totp_secret,
+            "rsa_public_pem": rsa_public_pem,
+            "rsa_private_enc_pem": rsa_private_enc_pem,
+            "ecdsa_public_pem": ecdsa_public_pem,
+            "ecdsa_private_enc_pem": ecdsa_private_enc_pem,
+            "balance": round(float(initial_balance), 2)
+        }
+        _save_data(data, db_path)
         return True
-    except sqlite3.IntegrityError:
-        return False
 
 
 def get_user_by_username(username: str, db_path: str = DEFAULT_DB_PATH) -> Optional[Dict[str, Any]]:
     """Recupera todos los datos de un usuario por su username."""
-    with get_connection(db_path) as conn:
-        row = conn.execute(
-            "SELECT * FROM users WHERE username = ?", (username,)
-        ).fetchone()
-        return dict(row) if row else None
+    with _db_lock:
+        data = _load_data(db_path)
+        user = data["users"].get(username)
+        return dict(user) if user else None
 
 
 def list_usernames(db_path: str = DEFAULT_DB_PATH) -> List[str]:
-    """Devuelve la lista de usuarios registrados (útil para el selector de destinatarios)."""
-    with get_connection(db_path) as conn:
-        rows = conn.execute("SELECT username FROM users ORDER BY username ASC").fetchall()
-        return [row["username"] for row in rows]
+    """Devuelve la lista ordenada de usuarios registrados."""
+    with _db_lock:
+        data = _load_data(db_path)
+        return sorted(data["users"].keys())
 
 
 # ==========================================
@@ -132,12 +96,10 @@ def list_usernames(db_path: str = DEFAULT_DB_PATH) -> List[str]:
 # ==========================================
 
 def is_nonce_used(tx_nonce: str, db_path: str = DEFAULT_DB_PATH) -> bool:
-    """Comprueba si un nonce de transacción ya fue utilizado (defensa contra Replay Attack)."""
-    with get_connection(db_path) as conn:
-        row = conn.execute(
-            "SELECT 1 FROM used_nonces WHERE tx_nonce = ?", (tx_nonce,)
-        ).fetchone()
-        return row is not None
+    """Comprueba si un nonce de transacción ya fue utilizado."""
+    with _db_lock:
+        data = _load_data(db_path)
+        return tx_nonce in data["used_nonces"]
 
 
 def execute_transfer(
@@ -156,78 +118,71 @@ def execute_transfer(
     db_path: str = DEFAULT_DB_PATH
 ) -> None:
     """
-    Ejecuta la transferencia de forma atómica:
-    1. Verifica que el nonce no haya sido usado.
-    2. Actualiza saldos de emisor y receptor.
-    3. Guarda la transacción cifrada/firmada y registra el nonce.
-    Lanza ValueError si hay saldo insuficiente o ataque de repetición.
+    Ejecuta la transferencia verificando control anti-replay y saldo.
+    Si algo falla, no se guarda ningún cambio en el JSON.
     """
-    conn = get_connection(db_path)
-    try:
-        cursor = conn.cursor()
-        cursor.execute("BEGIN")
+    with _db_lock:
+        data = _load_data(db_path)
 
         # 1. Control Anti-Replay
-        if cursor.execute("SELECT 1 FROM used_nonces WHERE tx_nonce = ?", (tx_nonce,)).fetchone():
+        if tx_nonce in data["used_nonces"]:
             raise ValueError("Ataque de repetición detectado: el nonce ya ha sido consumido.")
 
-        # 2. Comprobar saldo del emisor
-        sender_row = cursor.execute(
-            "SELECT balance FROM users WHERE username = ?", (sender,)
-        ).fetchone()
-        if not sender_row or sender_row["balance"] < amount:
+        # 2. Validar existencia de usuarios y saldo del emisor
+        if sender not in data["users"] or receiver not in data["users"]:
+            raise ValueError("El emisor o el receptor no existen.")
+
+        if data["users"][sender]["balance"] < amount:
             raise ValueError("Saldo insuficiente para realizar la transferencia.")
 
         # 3. Actualizar saldos
-        cursor.execute("UPDATE users SET balance = balance - ? WHERE username = ?", (amount, sender))
-        cursor.execute("UPDATE users SET balance = balance + ? WHERE username = ?", (amount, receiver))
+        data["users"][sender]["balance"] = round(data["users"][sender]["balance"] - amount, 2)
+        data["users"][receiver]["balance"] = round(data["users"][receiver]["balance"] + amount, 2)
 
         # 4. Guardar transacción
-        cursor.execute("""
-            INSERT INTO transactions (
-                tx_id, sender, receiver, amount, timestamp,
-                aes_nonce, aes_ciphertext, enc_aes_key_receiver, enc_aes_key_sender,
-                ecdsa_signature, settlement_hmac, tx_nonce
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            tx_id, sender, receiver, amount, timestamp,
-            aes_nonce, aes_ciphertext, enc_aes_key_receiver, enc_aes_key_sender,
-            ecdsa_signature, settlement_hmac, tx_nonce
-        ))
+        data["transactions"].append({
+            "tx_id": tx_id,
+            "sender": sender,
+            "receiver": receiver,
+            "amount": round(float(amount), 2),
+            "timestamp": timestamp,
+            "aes_nonce": aes_nonce,
+            "aes_ciphertext": aes_ciphertext,
+            "enc_aes_key_receiver": enc_aes_key_receiver,
+            "enc_aes_key_sender": enc_aes_key_sender,
+            "ecdsa_signature": ecdsa_signature,
+            "settlement_hmac": settlement_hmac,
+            "tx_nonce": tx_nonce
+        })
 
         # 5. Marcar nonce como consumido
-        now_iso = datetime.now(timezone.utc).isoformat()
-        cursor.execute(
-            "INSERT INTO used_nonces (tx_nonce, used_at) VALUES (?, ?)",
-            (tx_nonce, now_iso)
-        )
+        data["used_nonces"][tx_nonce] = datetime.now(timezone.utc).isoformat()
 
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+        # Solo se escribe en disco si todos los pasos anteriores tuvieron éxito
+        _save_data(data, db_path)
 
 
 def get_user_transactions(username: str, db_path: str = DEFAULT_DB_PATH) -> List[Dict[str, Any]]:
     """Devuelve todas las transferencias enviadas o recibidas por un usuario."""
-    with get_connection(db_path) as conn:
-        rows = conn.execute("""
-            SELECT * FROM transactions
-            WHERE sender = ? OR receiver = ?
-            ORDER BY timestamp DESC
-        """, (username, username)).fetchall()
-        return [dict(row) for row in rows]
+    with _db_lock:
+        data = _load_data(db_path)
+        user_txs = [
+            dict(tx) for tx in data["transactions"]
+            if tx["sender"] == username or tx["receiver"] == username
+        ]
+        # Ordenar de más reciente a más antigua
+        user_txs.sort(key=lambda x: x["timestamp"], reverse=True)
+        return user_txs
 
 
 def get_transaction_by_id(tx_id: str, db_path: str = DEFAULT_DB_PATH) -> Optional[Dict[str, Any]]:
     """Recupera una transacción concreta por su UUID."""
-    with get_connection(db_path) as conn:
-        row = conn.execute(
-            "SELECT * FROM transactions WHERE tx_id = ?", (tx_id,)
-        ).fetchone()
-        return dict(row) if row else None
+    with _db_lock:
+        data = _load_data(db_path)
+        for tx in data["transactions"]:
+            if tx["tx_id"] == tx_id:
+                return dict(tx)
+        return None
 
 
 # ==========================================
@@ -241,22 +196,24 @@ def add_crypto_log(
     db_path: str = DEFAULT_DB_PATH
 ) -> None:
     """Registra una operación criptográfica pública para la consola de depuración."""
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    with get_connection(db_path) as conn:
-        conn.execute("""
-            INSERT INTO crypto_logs (timestamp, operation, algorithm, details)
-            VALUES (?, ?, ?, ?)
-        """, (timestamp, operation, algorithm, details))
-        conn.commit()
+    with _db_lock:
+        data = _load_data(db_path)
+        next_id = len(data["crypto_logs"]) + 1
+        data["crypto_logs"].append({
+            "id": next_id,
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+            "operation": operation,
+            "algorithm": algorithm,
+            "details": details
+        })
+        _save_data(data, db_path)
 
 
 def get_crypto_logs(limit: int = 50, db_path: str = DEFAULT_DB_PATH) -> List[Dict[str, Any]]:
-    """Obtiene los últimos registros de auditoría para mostrarlos en la interfaz."""
-    with get_connection(db_path) as conn:
-        rows = conn.execute(
-            "SELECT * FROM crypto_logs ORDER BY id DESC LIMIT ?", (limit,)
-        ).fetchall()
-        return [dict(row) for row in rows]
+    """Obtiene los últimos registros de auditoría (del más reciente al más antiguo)."""
+    with _db_lock:
+        data = _load_data(db_path)
+        return list(reversed(data["crypto_logs"][-limit:]))
 
 
 # ==========================================
@@ -270,23 +227,23 @@ def tamper_transaction(
     db_path: str = DEFAULT_DB_PATH
 ) -> bool:
     """
-    Altera deliberadamente un campo de una transacción en BD para demostrar
+    Altera deliberadamente un campo de una transacción en el JSON para demostrar
     en vivo cómo fallan AES-GCM, ECDSA o HMAC ante manipulaciones.
     """
     allowed_fields = {"amount", "aes_ciphertext", "ecdsa_signature", "settlement_hmac"}
     if field not in allowed_fields:
         raise ValueError(f"Campo no permitido para simulación de ataque: {field}")
 
-    with get_connection(db_path) as conn:
-        cursor = conn.execute(
-            f"UPDATE transactions SET {field} = ? WHERE tx_id = ?",
-            (new_value, tx_id)
-        )
-        conn.commit()
-        return cursor.rowcount > 0
+    with _db_lock:
+        data = _load_data(db_path)
+        for tx in data["transactions"]:
+            if tx["tx_id"] == tx_id:
+                tx[field] = new_value
+                _save_data(data, db_path)
+                return True
+        return False
 
 
-# Prueba rápida si se ejecuta este archivo directamente
 if __name__ == "__main__":
     init_db()
-    print("[OK] Base de datos 'cryptopay.db' inicializada correctamente con las 4 tablas.")
+    print("[OK] Archivo 'cryptopay_data.json' inicializado correctamente.")

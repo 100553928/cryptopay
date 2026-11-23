@@ -225,8 +225,8 @@ __marimo__/
 venv/
 .venv/
 __pycache__/
-*.db
-*.sqlite3
+cryptopay_data.json
+test_*.json
 *.pem
 *.key
 .env
