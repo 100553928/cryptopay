@@ -36,6 +36,8 @@ def validate_password_strength(password: str) -> Tuple[bool, str]:
         return False, "La contraseña debe incluir al menos una letra minúscula."
     if not re.search(r"[0-9]", password):
         return False, "La contraseña debe incluir al menos un número."
+    if not re.search(r"[^a-zA-Z0-9\s]", password):
+        return False, "La contraseña debe incluir al menos un carácter especial (ej. !, @, #, $)."
     return True, "Contraseña robusta."
 
 
@@ -159,7 +161,7 @@ def generate_user_keypairs(password: str) -> Dict[str, str]:
 
 # Prueba rápida local de este bloque
 if __name__ == "__main__":
-    pwd = "MiPassword2026"
+    pwd = "MiPassword2026#"
     ok, msg = validate_password_strength(pwd)
     print(f"[1] Validación: {ok} ({msg})")
 
@@ -167,7 +169,7 @@ if __name__ == "__main__":
     print(f"[2] Salt (16B hex): {salt_h}")
     print(f"    Hash Scrypt:    {hash_h[:32]}...")
     print(f"    Verify OK:      {verify_password(pwd, salt_h, hash_h)}")
-    print(f"    Verify Mal:     {verify_password('OtraClave123', salt_h, hash_h)}")
+    print(f"    Verify Mal:     {verify_password('OtraClave123!', salt_h, hash_h)}")
 
     totp_sec = generate_totp_secret()
     codigo = get_current_totp_code(totp_sec)
