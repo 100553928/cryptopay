@@ -99,31 +99,3 @@ def verify_settlement_hmac(
         return True
     except (InvalidSignature, ValueError):
         return False
-
-
-# Prueba rápida local de este módulo
-if __name__ == "__main__":
-    # Simulamos un secreto maestro generado en memoria (nunca fijo en el código)
-    master_secret = secrets.token_bytes(32)
-    hmac_key = derive_hmac_key(master_secret)
-
-    tx_id = "tx-001"
-    tx_nonce = generate_tx_nonce()
-
-    # 1. Generamos el HMAC de una transferencia válida
-    tag_hex = generate_settlement_hmac(hmac_key, tx_id, "ana", "carlos", 25.50, tx_nonce)
-    print(f"[1] Nonce anti-replay (128b): {tx_nonce}")
-    print(f"[2] Etiqueta HMAC-SHA256:     {tag_hex}")
-
-    # 2. Prueba positiva
-    ok = verify_settlement_hmac(hmac_key, tx_id, "ana", "carlos", 25.50, tx_nonce, tag_hex)
-    print(f"[3] Verificación legítima:    {ok}")
-
-    # 3. Prueba negativa: un atacante altera el importe de 25.50 a 2500.00
-    tampered_amount = verify_settlement_hmac(hmac_key, tx_id, "ana", "carlos", 2500.00, tx_nonce, tag_hex)
-    print(f"[4] Importe alterado (ataque): {tampered_amount}")
-
-    # 4. Prueba negativa: un atacante altera el último carácter del HMAC
-    fake_tag = tag_hex[:-1] + ("0" if tag_hex[-1] != "0" else "1")
-    tampered_tag = verify_settlement_hmac(hmac_key, tx_id, "ana", "carlos", 25.50, tx_nonce, fake_tag)
-    print(f"[5] HMAC alterado (ataque):    {tampered_tag}")

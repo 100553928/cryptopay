@@ -153,23 +153,3 @@ def generate_user_keypairs(password: str) -> Dict[str, str]:
         "ecdsa_public_pem": ecdsa_public_pem,
         "ecdsa_private_enc_pem": ecdsa_private_enc_pem
     }
-
-
-# Prueba rápida local de este bloque
-if __name__ == "__main__":
-    pwd = "MiPassword2026#"
-    ok, msg = validate_password_strength(pwd)
-    print(f"[1] Validación: {ok} ({msg})")
-
-    salt_h, hash_h = hash_password(pwd)
-    print(f"[2] Salt (16B hex): {salt_h}")
-    print(f"    Hash Scrypt:    {hash_h[:32]}...")
-    print(f"    Verify OK:      {verify_password(pwd, salt_h, hash_h)}")
-    print(f"    Verify Mal:     {verify_password('OtraClave123!', salt_h, hash_h)}")
-
-    totp_sec = generate_totp_secret()
-    codigo = get_current_totp_code(totp_sec)
-    print(f"[3] TOTP código actual: {codigo} | Válido: {verify_totp(totp_sec, codigo)}")
-
-    claves = generate_user_keypairs(pwd)
-    print(f"[4] Claves generadas -> RSA Privada cifrada empieza por:\n    {claves['rsa_private_enc_pem'].splitlines()[0]}")
