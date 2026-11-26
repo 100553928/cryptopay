@@ -63,7 +63,7 @@ def encrypt_transfer_concept(
     # para que solo el receptor y el emisor puedan acceder al concepto cifrado y puedan validar 
     # los metadatos
     
-    # Cargas en RAM el candado del receptor y el del emisor.
+    # Cargamos en RAM el candado del receptor y el del emisor.
     receiver_public_key = load_public_key(receiver_rsa_public_pem)
     sender_public_key = load_public_key(sender_rsa_public_pem)
     
@@ -103,7 +103,7 @@ def decrypt_transfer_concept(
     nonce = bytes.fromhex(aes_nonce_hex)
     ciphertext = bytes.fromhex(aes_ciphertext_hex)
     
-    # Volviendo a aplicar OAEP revertimos la operación y con nuestra clave privada obtenemos aes_key
+    # Volviendo a aplicar OAEP (con SHA256) revertimos la operación y con nuestra clave privada obtenemos aes_key
     oaep_padding = padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA256()), algorithm=hashes.SHA256(), label=None)
     aes_key = private_key.decrypt(enc_aes_key, oaep_padding)
     
