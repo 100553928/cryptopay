@@ -127,7 +127,7 @@ def login_user() -> tuple[str | None, str | None]:
         return None, None
 
     # Mostramos el código TOTP actual solo como ayuda de depuración para la demo en clase
-    print(f"Código TOTP actual para '{username}': {auth.get_current_totp_code(user['totp_secret'])}")
+    print(f"Código TOTP actual para '{username}': {auth.get_current_totp_code(user['totp_secret'])} (caduca en 30 segundos)")
     totp_code = input("Introduce el código 2FA (6 dígitos): ").strip()
 
     # Factor 2: Verificación del código TOTP
